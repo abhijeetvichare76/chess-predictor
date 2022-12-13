@@ -1,0 +1,518 @@
+# Final Project 
+# EDA on the Chess Games dataset
+## By: Abhijeet Vichare
+## Date: 12/05/2022
+
+## Table of Contents
+1. Introduction
+2. Data
+3. Data Cleaning
+4. Exploratory Data Analysis
+5. Model Building
+6. Conclusion
+
+1. Data Wrangling
+    a. Data importing
+    b. Checking the data types of variables and performing necessary steps to change the data type based on relevancy.
+    c. Univariate Statistics of the variables
+    d. Dealing with null values
+    e. Outlier analysis
+2. Data Visualization
+    a. Bivariate analysis
+    b. Correlation analysis
+3. Feature
+    a. Chi square test
+    b. ANOVA test
+    c. Correlation test
+4. Linear Regression
+    a. Linear Regression assumption validation
+    b. Model training
+    c. Hyperparameter tuning
+    d. Regularization
+    e. Result visualization
+    
+## 1. Introduction
+
+We have used the [chess dataset]{https://www.kaggle.com/datasets/datasnaek/chess} from kaggle which 
+contains the data of chess games played by different players. The dataset contains 20058 rows and 16 columns
+and its collected from Lichess.org. A short description of the dataset: 
+
+1. id: Unique ID for the game 
+2. rated: Indicates whether the game was rated or unrated
+3. created_at: Timestamp of the game creation
+4. last_move_at: Timestamp of the last move
+5. turns: Number of turns in the game
+6. victory_status: Indicates the status of the game (win, draw, outoftime, resign, mate)
+7. winner: Indicates the winner of the game (white, black, draw)
+8. increment_code: Increment code
+9. white_id: Unique ID of the white player
+10. white_rating: Rating of the white player
+11. black_id: Unique ID of the black player
+12. black_rating: Rating of the black player
+13. moves: Moves in the game
+14. opening_eco: Opening ECO
+15. opening_name: Opening name
+16. opening_ply: Opening ply
+
+## 2. Data
+### 2.1 Importing the libraries
+```{r}
+# install.packages(c("assertive.data","plotly","tidyverse", "ggplot2", "dplyr", "ggcorrplot", "corrplot", "caret", "rpart", "rpart.plot", "rattle", "rpart.plot"))
+```
+```{r}
+library(ggplot2)
+library(corrplot)
+library(caret)
+library(plotly)
+library(assertive.data)
+source("model_training.R")
+```
+
+### 2.2 Importing the dataset
+```{r}
+chess <- read.csv("games.csv")
+```
+```{r}
+colnames(chess)
+```
+### 2.3 Data Exploration
+```{r}
+#types of data
+str(chess)
+#summary of data
+summary(chess)
+#checking for null values
+colSums(is.na(chess))
+```
+There are 20058 rows and 16 columns in the dataset. Columns like rated can be converted to boolean. 
+We can convert the numerical created_at and last_move_at to date time format. The columns like white_id, black_id can be dropped as they are not relevant to the analysis. The column id can be dropped as it is just a unique identifier for the game. The column turns can be dropped as it is highly correlated with the column white_rating. The column victory_status can be dropped as it is highly correlated with the column winner.
+There are no null values in the dataset.
+```{r}
+# converting rated to boolean
+chess$rated <- as.logical(chess$rated)
+# converting created_at and last_move_at to date time format
+chess$created_at <- as.POSIXct(chess$created_at/1000, origin = "1970-01-01")
+chess$last_move_at <- as.POSIXct(chess$last_move_at/1000, origin = "1970-01-01")
+```
+```{r}
+# difference of created_at and last_move_at
+chess$match_length <- chess$last_move_at - chess$created_at
+# limit the max to 2000s
+chess$match_length <- ifelse(chess$match_length > 1500, 1500, chess$match_length)
+```
+
+
+### 2.4 Univariate Visualization
+```{r}
+# convert match_length to float and plot the histogram
+chess$match_length <- as.numeric(chess$match_length)
+ggplot(chess, aes(x = match_length)) + geom_histogram(bins = 100)
+```
+There are outliers at 0 and 1500. We can remove the outliers and plot the histogram again.
+```{r}
+# remove the outliers and plot the histogram
+temp <- filter(chess, match_length > 0 & match_length < 1500)
+ggplot(temp, aes(x = match_length)) + geom_histogram(bins = 100)
+```
+
+```{r}
+#histogram of white_rating
+ggplot(chess, aes(x = white_rating)) + geom_histogram(bins = 100)
+```
+```{r}
+#histogram of black_rating
+ggplot(chess, aes(x = black_rating)) + geom_histogram(bins = 100)
+```
+```{r}
+# combine the white_rating and black_rating into one vector and plot the histogram
+rating <- c(chess$white_rating, chess$black_rating)
+ggplot(data.frame(rating), aes(x = rating)) + geom_histogram(bins = 100)
+```
+```{r}
+#value counts of rating and sort it in descending order
+
+rating <- c(chess$white_rating, chess$black_rating)
+rating <- as.data.frame(table(rating))
+rating <- rating[order(-rating$Freq),]
+head(rating)
+```
+The ratings follow a normal distribution. The mean of the ratings is 1591. There is one outlier of  1500 where The most common rating is 1500.
+
+```{r}
+# Distribution of the Victory Status
+ggplot(chess, aes(x = victory_status)) + geom_bar()
+#value counts as percentage of victory_status and sort it in descending order
+victory_status <- as.data.frame(table(chess$victory_status))
+victory_status$percent <- round(victory_status$Freq/sum(victory_status$Freq)*100, 2)
+victory_status <- victory_status[order(-victory_status$percent),]
+victory_status
+```
+55.5% of the games are resigned and 31.53% of the games end by a mate.
+```{r}
+# Turn Distribution
+ggplot(chess, aes(x = turns)) + geom_histogram(bins = 100)
+summary(chess$turns)
+```
+```{r}
+# Distribution of the Winner
+ggplot(chess, aes(x = winner)) + geom_bar()
+#value counts as percentage of winner and sort it in descending order
+winner <- as.data.frame(table(chess$winner))
+winner$percent <- round(winner$Freq/sum(winner$Freq)*100, 2)
+winner <- winner[order(-winner$percent),]
+winner
+```
+
+```{r}
+# Divide the increment code into two columns
+chess$increment_code <- as.character(chess$increment_code)
+# everthing before the plus sign
+chess$increment_code1 <- strsplit(chess$increment_code, split = "\\+")
+chess$increment_code1 <- sapply(chess$increment_code1, function(x) x[1])
+# everything after the plus sign
+chess$increment_code2 <- strsplit(chess$increment_code, split = "\\+")
+chess$increment_code2 <- sapply(chess$increment_code2, function(x) x[2])
+```
+```{r}
+# convert to numeric and plot the histogram
+chess$increment_code1 <- as.numeric(chess$increment_code1)
+ggplot(chess, aes(x = increment_code1)) + geom_histogram(bins = 100)
+```
+```{r}
+# convert to numeric and plot the histogram
+chess$increment_code2 <- as.numeric(chess$increment_code2)
+ggplot(chess, aes(x = increment_code2)) + geom_histogram(bins = 100)
+```
+```{r}
+# Median of the increment code1
+median(chess$increment_code1)
+# Median of the increment code2
+median(chess$increment_code2)
+```
+
+The median base time of match is 10 minutes and the increment is 0 second which is sudden death.
+```{r}
+#value counts as percentage of opening_name and sort it in descending order
+opening_name <- as.data.frame(table(chess$opening_name))
+opening_name$percent <- round(opening_name$Freq/sum(opening_name$Freq)*100, 2)
+opening_name <- opening_name[order(-opening_name$percent),]
+head(opening_name)
+dim(opening_name)
+```
+There are 1477 unique opening names. The most common opening name is Van't Kruijs Opening. 
+
+### 2.5 Bivariate Visualization
+Points to check: 
+- Is there a relationship between the match length and the ratings?
+- Is there a relationship between the match length and the victory status?
+- Is there a relationship between the match length and the winner?
+- Is there a relationship between the match length and the increment code?
+- Is there a relationship between the match length and the opening name?
+- Is there a relationship between the ratings and the victory status?
+- Is there a relationship between the ratings and the winner?
+- Is there a relationship between the ratings and the increment code?
+- Is there a relationship between the ratings and the opening name?
+- Is there a relationship between the victory status and the winner?
+- Is there a relationship between the victory status and the increment code?
+- Is there a relationship between the victory status and the opening name?
+- Is there a relationship between the winner and the increment code?
+- Is there a relationship between the winner and the opening name?
+- Is there a relationship between the increment code and the opening name?
+```{r}
+# Is there a relationship between the match length and the ratings?
+ggplot(chess, aes(x = match_length, y = white_rating)) + geom_point()
+ggplot(chess, aes(x = match_length, y = black_rating)) + geom_point()
+# correlation between match_length and white_rating and the best fit line
+cor.test(chess$match_length, chess$white_rating)
+# correlation between match_length and black_rating and the best fit line
+cor.test(chess$match_length, chess$black_rating)
+```
+There seems to be no relationship between the match length and the ratings.
+```{r}
+# Is there a relationship between the match length and the victory status?
+# Check the relationship between a catergorical variable and a numerical variable
+ggplot(chess, aes(x = match_length, y = victory_status)) + geom_boxplot()
+```
+The resigns and mates have a lower match length than the others. 
+The out_of_time has the highest match length than the others. Is it a correlation or a causation?
+```{r}
+# Is there a relationship between the match length and the winner?
+ggplot(chess, aes(x = match_length, y = winner)) + geom_boxplot()
+```
+If it's a draw the match length is longer than the others. It seems natural as the draw matches tend
+to be longer than the others towards the end of the game. 
+```{r}
+# Is there a relationship between the match length and the increment code?
+# Bin the increment_code1 into bins based on custom bins
+chess$increment_code1_bin <- cut(chess$increment_code1, breaks = c(0, 20, 50, 100, 200, 1000))
+ggplot(chess, aes(x = match_length, y = increment_code1_bin)) + geom_boxplot()
+```
+The match length seems to be lower for increment codes between 0-20 as that seems natural due to the 
+sudden death nature of the game. Surprisingly, the match length of increment codes between 50-100 is lower
+than the match length of increment codes between 20-50. 
+
+```{r}
+# Is there a relationship between the ratings and the victory status?
+ggplot(chess, aes(x = white_rating, y = victory_status)) + geom_boxplot()
+ggplot(chess, aes(x = black_rating, y = victory_status)) + geom_boxplot()
+```
+There seems to be no relationship between the ratings and the victory status.
+```{r}
+# Is there a relationship between the ratings and the winner?
+ggplot(chess, aes(x = white_rating, y = winner)) + geom_boxplot()
+ggplot(chess, aes(x = black_rating, y = winner)) + geom_boxplot()
+```
+As expected, the higher the rating the higher the chance of winning. 
+```{r}
+# Let's check the difference in ratings between the winner and the loser
+chess$rating_diff <- chess$white_rating - chess$black_rating
+# Put the title of the plot as the difference in ratings
+ggplot(chess, aes(x = rating_diff, y = winner)) + geom_boxplot() + labs(title = "Difference in ratings (White - Black) Vs Winner")
+```
+It can be seen in the boxplots that majority of the draws have a difference in ratings of 0. 
+And the difference is postive when white wins and negative when black wins with a few outliers.
+
+```{r}
+# Is there a relationship between the ratings and the increment code?
+# Bin the increment_code1 into bins based on custom bins
+chess$increment_code1_bin <- cut(chess$increment_code1, breaks = c(0, 20, 50, 100, 200, 1000))
+ggplot(chess, aes(x = white_rating, y = increment_code1_bin)) + geom_boxplot()
+ggplot(chess, aes(x = black_rating, y = increment_code1_bin)) + geom_boxplot()
+```
+There seems to be no relationship between the ratings and the increment code.
+```{r}
+chess$increment_code2_bin <- cut(chess$increment_code2, breaks = c(0, 20, 50, 100, 200, 1000))
+```
+```{r}
+# Is there a relationship between the victory status and the winner?
+# Create a table with counts across the two variables
+tab <- table(chess$victory_status, chess$winner)
+tab
+# Create a table with percentages across the two variables
+tab_percent <- round(prop.table(tab, 1)*100, 2)
+tab_percent
+```
+The table shows that black and white are equally probable to run out of time. There's a small advantage
+for white to resign and black to mate. 
+```{r}
+# Is there a relationship between the victory status and the increment code?
+# Create a table with counts across the two variables
+tab <- table(chess$victory_status, chess$increment_code1)
+tab
+# Create a table with percentages across the two variables
+tab_percent <- round(prop.table(tab, 1)*100, 2)
+tab_percent
+```
+
+```{r}
+# Is there a relationship between the winner and the increment code?
+# Create a table with counts across the two variables
+tab <- table(chess$winner, chess$increment_code1_bin)
+tab
+
+tab_percent <- round(prop.table(tab, 1)*100, 2)
+tab_percent
+```
+
+```{r}
+# Let's do some analysis on Moves
+# Is there a rela tionship between the match length and the number of moves?
+# correlation between match_length and moves and the best fit line
+cor.test(chess$match_length, chess$turns)
+```
+Ther's seems a weak correlation between the match length and the number of moves. 
+```{r}
+# Deep down into the column moves
+# Create a new column with the number of moves
+chess$number_of_moves <- sapply(chess$moves, function(x) length(strsplit(x, " ")[[1]]))
+
+# correlation between turns and number_of_moves and the best fit line
+cor.test(chess$turns, chess$number_of_moves)
+```
+```{r}
+# confirming that the number of moves and turns is equal for all rows.
+chess[chess$number_of_moves != chess$turns]
+```
+
+# 3 Feature Engineering and Selection
+    a. Chi square test
+    b. ANOV A test
+    c. Correlation test
+
+Given the data, we are going to predict the winner of the game. We'll treat black and white as 1, and 0 respectively. 
+We'll remove the draw cases as they are very few in number. 
+```{r}
+# Remove the draws
+chess <- subset(chess, winner != "draw")
+# Convert the winner column to 1 and 0
+chess$winner <- ifelse(chess$winner == "white", 1, 0)
+```
+
+We'll perform chi square test to check the relationship between the categorical variables and the winner.
+```{r}
+# get column names
+colnames(chess)
+```
+
+# Chi square test
+# Catergorical variables that we will consider:
+# victory_status, increment_code1_bin, rated
+# Create a function to perform chi square test
+```{r}
+chisq_test <- function(x, y) {
+  # Create a table with counts across the two variables
+  tab <- table(x, y)
+  # Create a table with percentages across the two variables
+  tab_percent <- round(prop.table(tab, 1)*100, 2)
+  # Perform chi square test
+  chi_sq <- chisq.test(tab)
+  # Print the results
+  print(chi_sq)
+  print(tab_percent)
+}
+```
+```{r}
+# Loop over categorical variables and perform chi square test
+for (i in c("victory_status", "increment_code1_bin", "increment_code2_bin", "rated")) {
+  print(i)
+  chisq_test(chess[[i]], chess$winner)
+}
+```
+```{r}
+# chisq_test(chess$increment_code1_bin, chess$winner)
+head(chess$increment_code1_bin)
+```
+
+
+# ANOVA test
+# Numerical variables that we will consider:
+# white_rating, black_rating, rating_diff, match_length, turns, number_of_moves,
+# increment_code1, increment_code2
+# Create a function to perform ANOVA test
+```{r}
+anova_test <- function(x, y) {
+  # Perform ANOVA test
+  anova <- aov(x ~ y)
+  # Print the results
+  print(anova)
+#   get the summary
+  print(summary(anova))
+}
+```
+```{r}
+# Loop over numerical variables and perform ANOVA test
+for (i in c("white_rating", "black_rating", "rating_diff", "match_length",  "increment_code1", "increment_code2")) {
+  print(i)
+  anova_test(chess[[i]], chess$winner)
+}
+```
+Increment codes have no relationship with the winner. black_rating and white_rating have a high
+significance with the winner. Rating diff also has a high significance with the winner. 
+
+
+```{r}
+# Correlation test
+# Numerical variables that we will consider:
+# white_rating, black_rating, rating_diff,
+
+# Create a function to perform correlation test
+cor_test <- function(x, y) {
+  # Perform correlation test
+  cor <- cor.test(x, y)
+  # Print the results
+  print(cor)
+}
+```
+```{r}
+# Loop over numerical variables and perform correlation test
+for (i in c("white_rating", "black_rating", "rating_diff")) {
+  print(i)
+  cor_test(chess[[i]], chess$winner)
+}
+```
+```{r}
+# correaltion between the numerical variables
+cor(chess[, c("white_rating", "black_rating", "rating_diff")])
+```
+
+# 4. Linear Regression
+a. Linear Regression assumption validation
+
+```{r}
+source("model_training.R")
+# Preprocessing function
+chess <- read.csv("games.csv")
+# Preprocess the data
+chess <- preprocess(chess)
+chess <- chess %>% select(-rating_diff) # nolint
+model <- train_model(chess)
+```
+```{r}
+```
+```{r}
+# Linear Regression assumption validation
+# 1. Linearity
+# Let's check the linearity of the numerical variables
+# Create a function to check the linearity of the numerical variables
+linearity_test <- function(x, y) {
+  # Perform linear regression
+  lm <- lm(x ~ y)
+  # Print the results
+  print(lm)
+  print(summary(lm))
+}
+```
+
+```{r}
+# Loop over numerical variables and perform linear regression
+for (i in c("white_rating", "black_rating")) {
+  print(i)
+  linearity_test(chess[[i]], chess$winner)
+}
+```
+```{r}
+# 2. Normality
+# Let's check the normality of the numerical variables
+# Create a function to check the normality of the numerical variables
+normality_test <- function(x) {
+  # Perform Shapiro-Wilk test
+    shapiro <-  shapiro.test(x)
+    print(shapiro)
+}
+```
+```{r}
+# Loop over numerical variables and perform Shapiro-Wilk test
+for (i in c("white_rating", "black_rating")) {
+  print(i)
+#   sample 5000 rows and perform the test
+    normality_test(sample(chess[[i]], 5000))
+}
+```
+
+b. Model training
+```{r}
+# Model training
+train_model <- function(data,verbose = FALSE) {
+  # Split the data into train and test
+  train_index <- createDataPartition(data$winner, p = 0.7, list = FALSE)
+  train <- data[train_index, ]
+  test <- data[-train_index, ]
+  # Train the model
+  model <- glm(winner ~ ., data = train, family = "binomial")
+  # Predict the test data
+  pred <- predict(model, test)
+  if (verbose) {
+    print(model)
+    print(summary(model))
+    # Print the confusion matrix
+    print(table(test$winner, pred > 0.5))
+    # Print the accuracy
+    print(mean(test$winner == (pred > 0.5)))
+
+  }
+  return(model)
+}
+```
+
+
+
